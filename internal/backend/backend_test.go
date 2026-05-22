@@ -2,6 +2,8 @@ package backend
 
 import (
 	"testing"
+
+	"github.com/sivel/appimg/internal/platform"
 )
 
 func TestRegisterAndLookup(t *testing.T) {
@@ -51,7 +53,8 @@ func TestSelectAsset_Pattern(t *testing.T) {
 		{Name: "app-linux-x86_64.AppImage"},
 	}
 	opts := Options{AssetPattern: "*aarch64*"}
-	got, err := selectAsset(assets, opts, "x86_64", "", "")
+	osInfo := platform.OSInfo{ID: "", IDLike: []string{}, Version: ""}
+	got, err := selectAsset(assets, opts, "x86_64", osInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +68,8 @@ func TestSelectAsset_PatternNoMatch(t *testing.T) {
 		{Name: "app-x86_64.AppImage"},
 	}
 	opts := Options{AssetPattern: "*arm*"}
-	_, err := selectAsset(assets, opts, "x86_64", "", "")
+	osInfo := platform.OSInfo{ID: "", IDLike: []string{}, Version: ""}
+	_, err := selectAsset(assets, opts, "x86_64", osInfo)
 	if err == nil {
 		t.Fatal("expected error for non-matching pattern, got nil")
 	}
@@ -77,7 +81,8 @@ func TestSelectAsset_NoAppImages(t *testing.T) {
 		{Name: "app.deb"},
 		{Name: "checksums.sha256"},
 	}
-	_, err := selectAsset(assets, Options{}, "x86_64", "", "")
+	osInfo := platform.OSInfo{ID: "", IDLike: []string{}, Version: ""}
+	_, err := selectAsset(assets, Options{}, "x86_64", osInfo)
 	if err == nil {
 		t.Fatal("expected error when no AppImage assets, got nil")
 	}
@@ -88,7 +93,8 @@ func TestSelectAsset_ArchScore(t *testing.T) {
 		{Name: "app.AppImage"},
 		{Name: "app-x86_64.AppImage"},
 	}
-	got, err := selectAsset(assets, Options{}, "x86_64", "", "")
+	osInfo := platform.OSInfo{ID: "", IDLike: []string{}, Version: ""}
+	got, err := selectAsset(assets, Options{}, "x86_64", osInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,9 +142,10 @@ func TestSelectAsset_PenaltyKeywords(t *testing.T) {
 			wantName: "app-x86_64.AppImage",
 		},
 	}
+	osInfo := platform.OSInfo{ID: "", IDLike: []string{}, Version: ""}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := selectAsset(tc.assets, Options{}, "x86_64", "", "")
+			got, err := selectAsset(tc.assets, Options{}, "x86_64", osInfo)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -154,7 +161,8 @@ func TestSelectAsset_TiebreakShorterName(t *testing.T) {
 		{Name: "MyApp-1.0.0-x86_64.AppImage"},
 		{Name: "MyApp-x86_64.AppImage"},
 	}
-	got, err := selectAsset(assets, Options{}, "x86_64", "", "")
+	osInfo := platform.OSInfo{ID: "", IDLike: []string{}, Version: ""}
+	got, err := selectAsset(assets, Options{}, "x86_64", osInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +175,8 @@ func TestSelectAsset_CaseInsensitive(t *testing.T) {
 	assets := []Asset{
 		{Name: "app-x86_64.APPIMAGE"},
 	}
-	got, err := selectAsset(assets, Options{}, "x86_64", "", "")
+	osInfo := platform.OSInfo{ID: "", IDLike: []string{}, Version: ""}
+	got, err := selectAsset(assets, Options{}, "x86_64", osInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +193,8 @@ func TestSelectAsset_DistroScore(t *testing.T) {
 		{Name: "Bambu_Studio_ubuntu-24.04_PR-9540.AppImage"},
 		{Name: "Bambu_Studio_linux_fedora-v02.05.00.66.AppImage"},
 	}
-	got, err := selectAsset(assets, Options{}, "x86_64", "ubuntu", "25.10")
+	osInfo := platform.OSInfo{ID: "ubuntu", IDLike: []string{}, Version: "25.10"}
+	got, err := selectAsset(assets, Options{}, "x86_64", osInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +209,8 @@ func TestSelectAsset_DistroExactVersion(t *testing.T) {
 		{Name: "app-ubuntu-24.04.AppImage"},
 	}
 	// Exact match for 24.04 should win.
-	got, err := selectAsset(assets, Options{}, "x86_64", "ubuntu", "24.04")
+	osInfo := platform.OSInfo{ID: "ubuntu", IDLike: []string{}, Version: "24.04"}
+	got, err := selectAsset(assets, Options{}, "x86_64", osInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,9 +261,45 @@ func TestVersionProximityScore(t *testing.T) {
 	}
 }
 
+func TestSelectAsset_IDLikeScore(t *testing.T) {
+	// Simulates Pop!_OS 24.04 (ID=pop_os, ID_LIKE=ubuntu debian): the ubuntu-24.04
+	// asset should win via IDLike version proximity over ubuntu-22.04 and debian-12.
+	assets := []Asset{
+		{Name: "app-ubuntu22.04.AppImage"},
+		{Name: "app-ubuntu24.04.AppImage"},
+		{Name: "app-debian12.AppImage"},
+		{Name: "app.AppImage"},
+	}
+	osInfo := platform.OSInfo{ID: "pop_os", IDLike: []string{"ubuntu", "debian"}, Version: "24.04"}
+	got, err := selectAsset(assets, Options{}, "x86_64", osInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "app-ubuntu24.04.AppImage" {
+		t.Errorf("got %q, want app-ubuntu24.04.AppImage", got.Name)
+	}
+}
+
+func TestSelectAsset_IDBeatsIDLike(t *testing.T) {
+	// A direct ID match (baseScore=5) should beat an IDLike match (baseScore=3).
+	assets := []Asset{
+		{Name: "app-debian.AppImage"},
+		{Name: "app-ubuntu.AppImage"},
+	}
+	osInfo := platform.OSInfo{ID: "ubuntu", IDLike: []string{"debian"}, Version: ""}
+	got, err := selectAsset(assets, Options{}, "x86_64", osInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "app-ubuntu.AppImage" {
+		t.Errorf("got %q, want app-ubuntu.AppImage", got.Name)
+	}
+}
+
 func TestSelectAsset_InvalidPattern(t *testing.T) {
 	assets := []Asset{{Name: "app-x86_64.AppImage"}}
-	_, err := selectAsset(assets, Options{AssetPattern: "["}, "x86_64", "", "")
+	osInfo := platform.OSInfo{ID: "", IDLike: []string{}, Version: ""}
+	_, err := selectAsset(assets, Options{AssetPattern: "["}, "x86_64", osInfo)
 	if err == nil {
 		t.Fatal("expected error for invalid pattern, got nil")
 	}

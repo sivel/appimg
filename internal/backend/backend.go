@@ -87,11 +87,10 @@ var penaltyKeywords = []string{"-lite", "-minimal", "-debug", "-dev"}
 // SelectAsset picks the best AppImage asset for the current platform.
 // If opts.AssetPattern is set it is used as a glob and the first match is returned.
 func SelectAsset(assets []Asset, opts Options) (*Asset, error) {
-	osInfo := platform.OS()
-	return selectAsset(assets, opts, platform.Arch(), osInfo.ID, osInfo.Version)
+	return selectAsset(assets, opts, platform.Arch(), platform.OS())
 }
 
-func selectAsset(assets []Asset, opts Options, arch, distro, distroVersion string) (*Asset, error) {
+func selectAsset(assets []Asset, opts Options, arch string, osInfo platform.OSInfo) (*Asset, error) {
 	if opts.AssetPattern != "" {
 		slog.Debug("selecting asset by pattern", "pattern", opts.AssetPattern)
 		for i := range assets {
@@ -107,7 +106,7 @@ func selectAsset(assets []Asset, opts Options, arch, distro, distroVersion strin
 		return nil, fmt.Errorf("no asset matching pattern %q", opts.AssetPattern)
 	}
 
-	ss, err := scoreAssets(assets, opts, arch, distro, distroVersion)
+	ss, err := scoreAssets(assets, opts, arch, osInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -116,11 +115,22 @@ func selectAsset(assets []Asset, opts Options, arch, distro, distroVersion strin
 
 // ScoreAssets returns all AppImage assets scored and sorted for the current platform.
 func ScoreAssets(assets []Asset, opts Options) ([]ScoredAsset, error) {
-	osInfo := platform.OS()
-	return scoreAssets(assets, opts, platform.Arch(), osInfo.ID, osInfo.Version)
+	return scoreAssets(assets, opts, platform.Arch(), platform.OS())
 }
 
-func scoreAssets(assets []Asset, opts Options, arch, distro, distroVersion string) ([]ScoredAsset, error) {
+func scoreAssets(assets []Asset, opts Options, arch string, osInfo platform.OSInfo) ([]ScoredAsset, error) {
+	type distroCandidate struct {
+		name      string
+		baseScore int
+	}
+	candidates := make([]distroCandidate, 0, 1+len(osInfo.IDLike))
+	if osInfo.ID != "" {
+		candidates = append(candidates, distroCandidate{osInfo.ID, 5})
+	}
+	for _, like := range osInfo.IDLike {
+		candidates = append(candidates, distroCandidate{like, 3})
+	}
+
 	var ss []ScoredAsset
 	for _, a := range assets {
 		if !strings.HasSuffix(strings.ToLower(a.Name), ".appimage") {
@@ -132,12 +142,15 @@ func scoreAssets(assets []Asset, opts Options, arch, distro, distroVersion strin
 		if strings.Contains(lower, strings.ToLower(arch)) {
 			score += 10
 		}
-		if distro != "" && strings.Contains(lower, distro) {
-			score += 5
-			if distroVersion != "" {
-				if av := distroVersionFromAsset(lower, distro); av != "" {
-					score += versionProximityScore(av, distroVersion)
+		for _, c := range candidates {
+			if strings.Contains(lower, c.name) {
+				score += c.baseScore
+				if osInfo.Version != "" {
+					if av := distroVersionFromAsset(lower, c.name); av != "" {
+						score += versionProximityScore(av, osInfo.Version)
+					}
 				}
+				break
 			}
 		}
 		for _, kw := range penaltyKeywords {

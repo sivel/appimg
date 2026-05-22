@@ -26,8 +26,9 @@ func Arch() string {
 
 // OSInfo holds OS identification parsed from /etc/os-release.
 type OSInfo struct {
-	ID      string // e.g. "ubuntu", "fedora"
-	Version string // e.g. "25.10", "41"
+	ID      string   // e.g. "ubuntu", "fedora"
+	IDLike  []string // e.g. "ubuntu debian"
+	Version string   // e.g. "25.10", "41"
 }
 
 // SupportsUserNamespaces reports whether unprivileged user namespaces are
@@ -58,12 +59,20 @@ func OS() OSInfo {
 		return OSInfo{}
 	}
 	var info OSInfo
+	matches := 0
 	for _, line := range strings.Split(string(data), "\n") {
 		if after, ok := strings.CutPrefix(line, "ID="); ok {
 			info.ID = strings.ToLower(strings.Trim(after, "\""))
-		}
-		if after, ok := strings.CutPrefix(line, "VERSION_ID="); ok {
+			matches++
+		} else if after, ok := strings.CutPrefix(line, "ID_LIKE="); ok {
+			info.IDLike = strings.Split(strings.Trim(after, "\""), " ")
+			matches++
+		} else if after, ok := strings.CutPrefix(line, "VERSION_ID="); ok {
 			info.Version = strings.Trim(after, "\"")
+			matches++
+		}
+		if matches == 3 {
+			break
 		}
 	}
 	return info
